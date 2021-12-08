@@ -1,0 +1,27 @@
+proj_dir: /home/chan/mRNA_seq_pipeline
+
+tmp_dir: tmp
+data_dir: data_1
+genome_dir: dna_ensembl_primary
+outputs_dir: results/outputs_1
+
+genome_file: Mus_musculus.GRCm38.dna.primary_assembly.fa
+annotation_file: transcripts/Mus_musculus.GRCm38.102.gtf
+ref_flat_file: transcripts/refFlat.ensembl.txt.gz
+adapters_file: adapters/NexteraPE-PE.fa
+multiqc_config_file: config/multiqc_config_1.yaml
+
+analysis_script: analysis_script_1.R
+analysis_outputs:
+  - analysis_report_paper_A_vs_C.html
+  - analysis_report_paper_A_vs_E.html
+  - analysis_report_project_A_vs_C.html
+  - analysis_report_project_A_vs_E.html
+  - comparison_report_A_vs_C.html
+  - comparison_report_A_vs_E.html
+
+jobs_script: jobs_report.Rmd
+
+sort_order: coordinate
+strandedness: 0
+sjdb_overhang: 149

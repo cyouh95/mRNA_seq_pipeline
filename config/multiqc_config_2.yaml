@@ -1,0 +1,45 @@
+# Header information
+
+intro_text: 'Using data from "Transcriptional Network Analysis Reveals the Role of miR-223-5p During Diabetic Corneal Epithelial Regeneration" (Zhang, 2021)'
+report_header_info:
+  - Series: 'GSE180490'
+  - BioProject: 'PRJNA748404'
+  - SRA: 'SRP329135'
+  - Platform: 'Illumina NovaSeq 6000 System'
+  - Setup: '2x150'
+  - Organism: 'Mus musculus'
+
+# Module order
+
+module_order:
+  - fastqc:
+      name: 'FastQC'
+      anchor: 'fastqc'
+      path_filters:
+        - '*_[12]_fastqc.zip'
+  - fastqc:
+      name: 'FastQC (trimmed)'
+      anchor: 'fastqc_trimmed'
+      path_filters:
+        - '*_[12]_paired_fastqc.zip'
+  - star
+  - picard:
+      name: 'Picard'
+      anchor: 'picard'
+      path_filters:
+        - '*_sorted.*'
+  - picard:
+      name: 'MarkDuplicates'
+      anchor: 'picard_markduplicates'
+      path_filters:
+        - '*_deduped.log'
+  - picard:
+      name: 'Picard (deduped)'
+      anchor: 'picard_deduped'
+      path_filters:
+        - '*_deduped.[!l]*'
+  - featureCounts:
+      name: 'FeatureCounts'
+      anchor: 'featurecounts'
+      path_filters:
+        - '*counts.txt.summary'

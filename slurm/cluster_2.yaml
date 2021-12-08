@@ -1,0 +1,28 @@
+__default__:
+    time: 10:00:00
+    mem: 50G
+    jobname: '{rule}.{wildcards.sample}'
+    output: 'results/outputs_2/logs/%x-%j.log'
+
+star_index:
+    mem: 100G
+    jobname: '{rule}'
+    output: 'results/index/%x-%j.log'
+
+featurecounts_count:
+    jobname: '{rule}'
+
+multiqc_quality:
+    jobname: '{rule}'
+
+r_diffexp:
+    jobname: '{rule}'
+
+jobs_info:
+    jobname: '{rule}'
+
+jobs_summary:
+    jobname: '{rule}'
+
+clean:
+    jobname: '{rule}'

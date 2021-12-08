@@ -1,0 +1,22 @@
+proj_dir: /home/chan/mRNA_seq_pipeline
+
+tmp_dir: tmp
+data_dir: data_2
+genome_dir: dna_ucsc
+outputs_dir: results/outputs_2
+
+genome_file: mm10.p6.fa
+annotation_file: transcripts/mm10.ensGene.gtf
+ref_flat_file: transcripts/refFlat.txt.gz
+adapters_file: adapters/TruSeq3-PE-2.fa
+multiqc_config_file: config/multiqc_config_2.yaml
+
+analysis_script: analysis_script_2.R
+analysis_outputs:
+  - analysis_report_project_diabetes_vs_control.html
+
+jobs_script: jobs_report.Rmd
+
+sort_order: coordinate
+strandedness: 2
+sjdb_overhang: 149

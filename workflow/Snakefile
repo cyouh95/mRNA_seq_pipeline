@@ -1,0 +1,132 @@
+# Load config
+
+configfile: 'config/config.yaml'
+
+
+# Define files and directories
+
+PROJ_DIR = config['proj_dir']
+WORKFLOW_DIR = f'{PROJ_DIR}/workflow'
+RESOURCES_DIR = f'{PROJ_DIR}/resources'
+
+ENVS_DIR = f'{WORKFLOW_DIR}/envs'
+RULES_DIR = f'{WORKFLOW_DIR}/rules'
+SCRIPTS_DIR = f'{WORKFLOW_DIR}/scripts'
+
+TMP_DIR = f'{PROJ_DIR}/{config["tmp_dir"]}'
+DATA_DIR = f'{RESOURCES_DIR}/{config["data_dir"]}'
+GENOME_DIR = f'{RESOURCES_DIR}/{config["genome_dir"]}'
+OUTPUTS_DIR = f'{PROJ_DIR}/{config["outputs_dir"]}'
+
+FASTQC_DIR = f'{OUTPUTS_DIR}/fastqc'
+MULTIQC_DIR = f'{OUTPUTS_DIR}/multiqc'
+TRIMMOMATIC_DIR = f'{OUTPUTS_DIR}/trimmomatic'
+STAR_DIR = f'{OUTPUTS_DIR}/star'
+PICARD_DIR = f'{OUTPUTS_DIR}/picard'
+PICARD_METRICS_DIR = f'{OUTPUTS_DIR}/picard_metrics'
+FTCOUNT_DIR = f'{OUTPUTS_DIR}/featurecounts'
+R_DIR = f'{OUTPUTS_DIR}/r'
+LOGS_DIR = f'{OUTPUTS_DIR}/logs'
+
+GENOME_FILE = f'{GENOME_DIR}/{config["genome_file"]}'
+GENOME_INDEXED_FILE = f'{GENOME_DIR}/genomeParameters.txt'
+ANNOTATION_FILE = f'{RESOURCES_DIR}/{config["annotation_file"]}'
+REF_FLAT_FILE = f'{RESOURCES_DIR}/{config["ref_flat_file"]}'
+ADAPTERS_FILE = f'{RESOURCES_DIR}/{config["adapters_file"]}'
+MULTIQC_CONFIG_FILE = f'{PROJ_DIR}/{config["multiqc_config_file"]}'
+
+R_SCRIPT = f'{SCRIPTS_DIR}/{config["analysis_script"]}'
+JOBS_SCRIPT = f'{SCRIPTS_DIR}/{config["jobs_script"]}'
+
+SORT_ORDER = config['sort_order']
+STRANDEDNESS = config['strandedness']
+SJDB_OVERHANG = config['sjdb_overhang']
+
+
+# Define file patterns
+
+SAMPLE_F_FILE = f'{DATA_DIR}/{{sample}}_1.fastq.gz'
+SAMPLE_R_FILE = f'{DATA_DIR}/{{sample}}_2.fastq.gz'
+
+TRIMMED_F_PAIRED_FILE = f'{TRIMMOMATIC_DIR}/{{sample}}_1_paired.fastq.gz'
+TRIMMED_F_UNPAIRED_FILE = f'{TRIMMOMATIC_DIR}/{{sample}}_1_unpaired.fastq.gz'
+TRIMMED_R_PAIRED_FILE = f'{TRIMMOMATIC_DIR}/{{sample}}_2_paired.fastq.gz'
+TRIMMED_R_UNPAIRED_FILE = f'{TRIMMOMATIC_DIR}/{{sample}}_2_unpaired.fastq.gz'
+
+FASTQC_F_FILE = f'{FASTQC_DIR}/{{sample}}_1_fastqc.zip'
+FASTQC_R_FILE = f'{FASTQC_DIR}/{{sample}}_2_fastqc.zip'
+TRIMMED_FASTQC_F_FILE = f'{FASTQC_DIR}/{{sample}}_1_paired_fastqc.zip'
+TRIMMED_FASTQC_R_FILE = f'{FASTQC_DIR}/{{sample}}_2_paired_fastqc.zip'
+
+MAPPED_BAM_FILE = f'{STAR_DIR}/{{sample}}.Aligned.out.bam'
+MAPPED_LOG_FILE = f'{STAR_DIR}/{{sample}}.Log.final.out'
+SORTED_BAM_FILE = f'{PICARD_DIR}/{{sample}}_sorted.bam'
+DEDUPED_BAM_FILE = f'{PICARD_DIR}/{{sample}}_deduped.bam'
+DEDUPED_LOG_FILE = f'{PICARD_DIR}/{{sample}}_deduped.log'
+
+PICARD_METRICS_EXT = [
+    'alignment_summary_metrics',
+    'base_distribution_by_cycle_metrics',
+    'base_distribution_by_cycle.pdf',
+    'gc_bias.detail_metrics',
+    'gc_bias.pdf',
+    'gc_bias.summary_metrics',
+    'insert_size_histogram.pdf',
+    'insert_size_metrics',
+    'quality_by_cycle_metrics',
+    'quality_by_cycle.pdf',
+    'quality_distribution_metrics',
+    'quality_distribution.pdf',
+    'rna_metrics'
+]
+
+SORTED_BAM_QUALITY_FILES = expand(PICARD_METRICS_DIR + '/{{sample}}_sorted.{ext}', ext=PICARD_METRICS_EXT)
+DEDUPED_BAM_QUALITY_FILES = expand(PICARD_METRICS_DIR + '/{{sample}}_deduped.{ext}', ext=PICARD_METRICS_EXT)
+
+MULTIQC_NAME = 'multiqc_report'
+MULTIQC_FILE = f'{MULTIQC_DIR}/{MULTIQC_NAME}.html'
+
+COUNTS_FILE = f'{FTCOUNT_DIR}/counts.txt'
+COUNTS_LOG = f'{FTCOUNT_DIR}/counts.txt.summary'
+
+R_OUTPUTS = [f'{R_DIR}/{file}' for file in config['analysis_outputs'] + ['summary_report.html']]
+
+JOBS_FILE = f'{R_DIR}/jobs.txt'
+JOBS_OUTPUT = f'{R_DIR}/jobs.html'
+
+
+# Define file lists
+
+SAMPLES = glob_wildcards(SAMPLE_F_FILE).sample
+
+ALL_FASTQC_FILES = expand(FASTQC_F_FILE, sample=SAMPLES) + expand(FASTQC_R_FILE, sample=SAMPLES)
+ALL_TRIMMED_FASTQC_FILES = expand(TRIMMED_FASTQC_F_FILE, sample=SAMPLES) + expand(TRIMMED_FASTQC_R_FILE, sample=SAMPLES)
+
+ALL_MAPPED_LOG_FILES = expand(MAPPED_LOG_FILE, sample=SAMPLES)
+ALL_SORTED_BAM_FILES = expand(SORTED_BAM_FILE, sample=SAMPLES)
+ALL_DEDUPED_BAM_FILES = expand(DEDUPED_BAM_FILE, sample=SAMPLES)
+ALL_DEDUPED_LOG_FILES = expand(DEDUPED_LOG_FILE, sample=SAMPLES)
+
+ALL_SORTED_BAM_QUALITY_FILES = expand(SORTED_BAM_QUALITY_FILES, sample=SAMPLES)
+ALL_DEDUPED_BAM_QUALITY_FILES = expand(DEDUPED_BAM_QUALITY_FILES, sample=SAMPLES)
+
+
+# Define rules
+
+include: f'{RULES_DIR}/fastqc.smk'
+include: f'{RULES_DIR}/trimmomatic.smk'
+include: f'{RULES_DIR}/star.smk'
+include: f'{RULES_DIR}/picard.smk'
+include: f'{RULES_DIR}/featurecounts.smk'
+include: f'{RULES_DIR}/multiqc.smk'
+include: f'{RULES_DIR}/r.smk'
+include: f'{RULES_DIR}/jobs.smk'
+
+
+rule all:
+    input:
+        JOBS_OUTPUT
+
+rule clean:
+    shell: 
+        f'rm -rf {FASTQC_DIR}/* {MULTIQC_DIR}/* {TRIMMOMATIC_DIR}/* {STAR_DIR}/* {PICARD_DIR}/* {PICARD_METRICS_DIR}/* {FTCOUNT_DIR}/* {R_DIR}/* {LOGS_DIR}/*'

@@ -1,0 +1,387 @@
+---
+title: 'Summary Report'
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+    df_print: paged
+
+params:
+  fig_width: 8
+  fig_height: 3
+  meta_data: ''
+  dir_name: ''
+  counts_log: ''
+---
+
+<style>
+pre code, pre, code {
+  white-space: pre !important;
+  overflow-x: auto !important;
+  word-break: keep-all !important;
+  word-wrap: initial !important;
+}
+</style>
+
+```{r setup, include = F}
+options(width = 10000)
+knitr::opts_chunk$set(fig.width=params$fig_width, fig.height=params$fig_height) 
+
+library(tidyverse)
+library(scales)
+
+select <- dplyr::select
+
+meta_data <- params$meta_data
+dir_name <- params$dir_name
+counts_log <- params$counts_log
+
+color_palette <- c('#bbcfd7', '#d2c8bc', '#ba9a88')
+
+
+# Trimmomatic logs
+get_trimmomatic_logs <- function(dir_name) {
+  trimmomatic_dir <- file.path(dir_name, 'logs')
+  
+  trimmomatic_logs <- list.files(trimmomatic_dir, pattern = 'trimmomatic_trim')
+  
+  trimmomatic_df <- data.frame(
+    sample_id = character(),
+    raw_cnt = numeric(0),
+    trimmed_survived_cnt = numeric(0),
+    trimmed_survived_pct = numeric(0),
+    trimmed_forward_cnt = numeric(0),
+    trimmed_forward_pct = numeric(0),
+    trimmed_reverse_cnt = numeric(0),
+    trimmed_reverse_pct = numeric(0),
+    trimmed_dropped_cnt = numeric(0),
+    trimmed_dropped_pct = numeric(0),
+    stringsAsFactors = F
+  )
+  
+  for (idx in seq_along(trimmomatic_logs)) {
+    log_text <- read_file(file.path(trimmomatic_dir, trimmomatic_logs[[idx]]))
+    
+    trimmomatic_df[idx, 1] <- str_extract(trimmomatic_logs[[idx]], 'SRR\\d+')
+    trimmomatic_df[idx, 2:10] <- str_match(log_text, 'Input Read Pairs: (\\d+) Both Surviving: (\\d+) \\(([\\d.]+)%\\) Forward Only Surviving: (\\d+) \\(([\\d.]+)%\\) Reverse Only Surviving: (\\d+) \\(([\\d.]+)%\\) Dropped: (\\d+) \\(([\\d.]+)%\\)')[1, 2:10] %>% as.numeric()
+  }
+  
+  trimmomatic_df
+}
+
+# STAR logs
+get_star_logs <- function(dir_name) {
+  star_dir <- file.path(dir_name, 'star')
+  
+  star_logs <- list.files(star_dir, pattern = 'Log\\.final\\.out')
+  
+  star_df <- data.frame(
+    sample_id = character(),
+    mapped_input_cnt = numeric(0),
+    mapped_unique_cnt = numeric(0),
+    mapped_unique_pct = numeric(0),
+    mapped_multi_cnt = numeric(0),
+    mapped_multi_pct = numeric(0),
+    mapped_many_cnt = numeric(0),
+    mapped_many_pct = numeric(0),
+    stringsAsFactors = F
+  )
+  
+  for (idx in seq_along(star_logs)) {
+    log_text <- read_file(file.path(star_dir, star_logs[[idx]]))
+    
+    star_df[idx, 1] <- str_extract(star_logs[[idx]], 'SRR\\d+')
+    star_df[idx, 2:8] <- str_match(log_text, 'Number of input reads \\|\\s+(\\d+)[\\s\\S]+Uniquely mapped reads number \\|\\s+(\\d+)\\s+Uniquely mapped reads % \\|\\s+([\\d.]+)[\\s\\S]+Number of reads mapped to multiple loci \\|\\s+(\\d+)\\s+% of reads mapped to multiple loci \\|\\s+([\\d.]+)[\\s\\S]+Number of reads mapped to too many loci \\|\\s+(\\d+)\\s+% of reads mapped to too many loci \\|\\s+([\\d.]+)[\\s\\S]+')[1, 2:8] %>% as.numeric()
+  }
+  
+  star_df
+}
+
+# Picard logs
+get_picard_logs <- function(dir_name) {
+  picard_dir <- file.path(dir_name, 'picard')
+  
+  picard_logs <- list.files(picard_dir, pattern = '_deduped\\.log')
+  
+  picard_df <- data.frame(
+    sample_id = character(),
+    deduped_dropped_pct = numeric(0),
+    stringsAsFactors = F
+  )
+  
+  for (idx in seq_along(picard_logs)) {
+    log_text <- read_file(file.path(picard_dir, picard_logs[[idx]]))
+    
+    picard_df[idx, 1] <- str_extract(picard_logs[[idx]], 'SRR\\d+')
+    picard_df[idx, 2] <- round(str_match(log_text, 'Unknown Library[\\s\\d]+\\t([\\d.]+)')[1, 2] %>% as.numeric() * 100, 2)
+  }
+  
+  picard_df %>% mutate(
+    deduped_survived_pct = 100 - deduped_dropped_pct
+  )
+}
+
+# featureCounts logs
+get_featurecounts_logs <- function(dir_name) {
+
+  log_text <- read_file(counts_log)
+  
+  sample_id <- str_extract_all(log_text, 'SRR\\d+', simplify = T)[1, ]
+  
+  assigned_text <- str_extract(log_text, 'Assigned(.+)')
+  assigned_cnt <- str_extract_all(assigned_text, '\\d+', simplify = T)[1, ]  %>% as.numeric()
+  
+  data.frame(
+    sample_id = sample_id,
+    assigned_cnt = assigned_cnt,
+    stringsAsFactors = F
+  )
+}
+
+# Combine dataframes
+get_samples_df <- function(meta_data, dir_name) {
+  trimmomatic_df <- get_trimmomatic_logs(dir_name)
+  star_df <- get_star_logs(dir_name)
+  picard_df <- get_picard_logs(dir_name)
+  featurecounts_df <- get_featurecounts_logs(dir_name)
+  
+  samples_df <- meta_data %>%
+    dplyr::select(Run, treatment) %>%
+    right_join(trimmomatic_df, by = c('Run' = 'sample_id')) %>% 
+    mutate(
+      trimmed_removed_cnt = raw_cnt - trimmed_survived_cnt,
+      trimmed_removed_pct = round(trimmed_removed_cnt / raw_cnt * 100, 2)
+    ) %>% 
+    left_join(star_df, by = c('Run' = 'sample_id')) %>% 
+    mutate(
+      mapped_nonunique_cnt = mapped_multi_cnt + mapped_many_cnt,
+      mapped_nonunique_pct = mapped_multi_pct + mapped_many_pct,
+      mapped_mapped_cnt = mapped_unique_cnt + mapped_nonunique_cnt,
+      mapped_mapped_pct = mapped_unique_pct + mapped_nonunique_pct,
+      mapped_unmapped_cnt = mapped_input_cnt - (mapped_unique_cnt + mapped_multi_cnt + mapped_many_cnt),
+      mapped_unmapped_pct = round(mapped_unmapped_cnt / mapped_input_cnt * 100, 2)
+    ) %>% 
+    left_join(picard_df, by = c('Run' = 'sample_id')) %>% 
+    left_join(featurecounts_df, by = c('Run' = 'sample_id')) %>% 
+    mutate(
+      assigned_pct = round(assigned_cnt / raw_cnt * 100, 2)
+    ) %>% 
+    dplyr::rename('sample_id' = 'Run') 
+  
+  samples_df$sample_id <- factor(samples_df$sample_id, levels = rev(samples_df$sample_id))
+  samples_df$trimmed_survived_cnt == samples_df$mapped_input_cnt
+  
+  samples_df
+}
+
+# Raw counts
+get_raw_counts <- function(samples_df, dir_name) {
+  samples_df %>% 
+    ggplot(aes(y = sample_id, x = raw_cnt, fill = treatment)) +
+    geom_col(width = 0.8) +
+    geom_text(aes(x = raw_cnt * 0.99, label = format(raw_cnt, big.mark = ',')), color = '#444444', size = 2.5, hjust = 1, vjust = 0.5, show.legend = F) +
+    xlab('') + ylab('') + 
+    scale_x_continuous(expand = expansion(mult = c(0, 0.01)), labels = label_number(suffix = 'M', scale = 1e-6)) +
+    scale_fill_manual(values = color_palette, name = 'Experimental conditions') +
+    theme(
+      text = element_text(size = 8, family = 'Times'),
+      legend.title = element_text(size = 7, face = 'bold'),
+      legend.key = element_rect(color = 'white', size = 0.4),
+      panel.background = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.text.y = element_text(face = 'bold')
+    )
+}
+
+# Trimmed counts
+get_trimmed_counts <- function(samples_df, dir_name) {
+  samples_df %>%
+    select(sample_id, treatment, trimmed_survived_cnt, trimmed_survived_pct, trimmed_removed_cnt, trimmed_removed_pct) %>%
+    pivot_longer(
+      -c(sample_id, treatment),
+      names_to = c('trim_res', '.value'),
+      names_pattern = 'trimmed_([a-z]+)_([a-z]+)'
+    ) %>% 
+    mutate(
+      trim_res = recode(trim_res, 'survived' = 'Survived', 'removed' = 'Dropped')
+    ) %>% 
+    ggplot(aes(x = cnt, y = sample_id, alpha = trim_res, fill = treatment)) + 
+    geom_bar(position = 'stack', stat = 'identity', width = 0.8) +
+    geom_text(aes(x = cnt * 0.99, label = if_else(trim_res == 'Survived', str_c(sprintf('%.1f', pct), '%'), '')), color = '#444444', size = 2.5, hjust = 1, vjust = 0.5, show.legend = F) +
+    xlab('') + ylab('') + 
+    scale_x_continuous(expand = expansion(mult = c(0, 0.01)), labels = label_number(suffix = 'M', scale = 1e-6)) +
+    scale_fill_manual(values = color_palette, name = 'Experimental conditions') +
+    scale_alpha_manual(values = c(0.4, 1), name = 'Trimming results') +
+    theme(
+      text = element_text(size = 8, family = 'Times'),
+      legend.title = element_text(size = 7, face = 'bold'),
+      legend.key = element_rect(color = 'white', size = 0.4),
+      panel.background = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.text.y = element_text(face = 'bold')
+    ) +
+    guides(alpha = guide_legend(reverse = T, order = 2), fill = guide_legend(order = 1))
+}
+
+# Mapped counts
+get_mapped_counts <- function(samples_df, dir_name) { 
+  samples_df %>%
+    select(sample_id, treatment, trimmed_removed_cnt, trimmed_removed_pct, mapped_unique_cnt, mapped_unique_pct, mapped_nonunique_cnt, mapped_nonunique_pct, mapped_unmapped_cnt, mapped_unmapped_pct) %>%
+    pivot_longer(
+      -c(sample_id, treatment),
+      names_to = c('map_res', '.value'),
+      names_pattern = '_([a-z]+)_([a-z]+)'
+    ) %>% 
+    mutate(
+      map_res = recode_factor(map_res, 'removed' = 'Dropped', 'unmapped' = 'Unmapped', 'nonunique' = 'Multi-mapped', 'unique' = 'Uniquely mapped')
+    ) %>% 
+    ggplot(aes(x = cnt, y = sample_id, alpha = map_res, fill = treatment)) + 
+    geom_bar(aes(color = map_res != 'Dropped'), size = 0.03, position = 'stack', stat = 'identity', width = 0.8) +
+    geom_text(aes(x = cnt, group = map_res, label = if_else(map_res != 'Dropped', str_c(sprintf('%.1f', pct), '%'), '')), color = '#444444', alpha = 1, size = 2.5, hjust = 0.5, position = position_stack(vjust = 0.5, reverse = F), show.legend = F) +
+    xlab('') + ylab('') + 
+    scale_x_continuous(expand = expansion(mult = c(0, 0.01)), labels = label_number(suffix = 'M', scale = 1e-6)) +
+    scale_fill_manual(values = color_palette, name = 'Experimental conditions') +
+    scale_alpha_manual(values = c(0.2, 0.6, 0.8, 1), name = 'Mapping results') +
+    scale_color_manual(values = c(NA, 'white'), guide = 'none') +
+    theme(
+      text = element_text(size = 8, family = 'Times'),
+      legend.title = element_text(size = 7, face = 'bold'),
+      legend.key = element_rect(color = 'white', size = 0.4),
+      panel.background = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.text.y = element_text(face = 'bold')
+    ) +
+    guides(alpha = guide_legend(reverse = T, order = 2), fill = guide_legend(order = 1))
+}
+
+# Deduped counts
+get_deduped_counts <- function(samples_df, dir_name) { 
+  samples_df %>%
+    select(sample_id, treatment, trimmed_removed_cnt, trimmed_removed_pct, mapped_unmapped_cnt, mapped_unmapped_pct, mapped_mapped_cnt, deduped_survived_pct, deduped_dropped_pct) %>%
+    mutate(
+      deduped_survived_cnt = deduped_survived_pct / 100 * mapped_mapped_cnt,
+      deduped_dropped_cnt = deduped_dropped_pct / 100 * mapped_mapped_cnt
+    ) %>% 
+    select(-mapped_mapped_cnt) %>% 
+    pivot_longer(
+      -c(sample_id, treatment),
+      names_to = c('dedupe_res', '.value'),
+      names_pattern = '_([a-z]+)_([a-z]+)'
+    ) %>% 
+    mutate(
+      dedupe_res = recode_factor(dedupe_res, 'removed' = 'Dropped', 'unmapped' = 'Unmapped', 'dropped' = 'Duplicates', 'survived' = 'Survived')
+    ) %>% 
+    ggplot(aes(x = cnt, y = sample_id, alpha = dedupe_res, fill = treatment)) + 
+    geom_bar(aes(color = !dedupe_res %in% c('Dropped', 'Unmapped')), size = 0.03, position = 'stack', stat = 'identity', width = 0.8) +
+    geom_text(aes(x = cnt, group = dedupe_res, label = if_else(!dedupe_res %in% c('Dropped', 'Unmapped'), str_c(sprintf('%.1f', pct), '%'), '')), color = '#444444', alpha = 1, size = 2.5, hjust = 0.5, position = position_stack(vjust = 0.5, reverse = F), show.legend = F) +
+    xlab('') + ylab('') + 
+    scale_x_continuous(expand = expansion(mult = c(0, 0.01)), labels = label_number(suffix = 'M', scale = 1e-6)) +
+    scale_fill_manual(values = color_palette, name = 'Experimental conditions') +
+    scale_alpha_manual(values = c(0.2, 0.4, 0.8, 1), name = 'Deduping results') +
+    scale_color_manual(values = c(NA, 'white'), guide = 'none') +
+    theme(
+      text = element_text(size = 8, family = 'Times'),
+      legend.title = element_text(size = 7, face = 'bold'),
+      legend.key = element_rect(color = 'white', size = 0.4),
+      panel.background = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.text.y = element_text(face = 'bold')
+    ) +
+    guides(alpha = guide_legend(reverse = T, order = 2), fill = guide_legend(order = 1))
+}
+
+# Assigned counts
+get_assigned_counts <- function(samples_df, dir_name) {
+  samples_df %>%
+    select(sample_id, treatment, raw_cnt, assigned_cnt, assigned_pct) %>%
+    mutate(
+      rest_cnt = raw_cnt - assigned_cnt,
+      rest_pct = 100 - assigned_pct
+    ) %>% 
+    select(-raw_cnt) %>% 
+    pivot_longer(
+      -c(sample_id, treatment),
+      names_to = c('assign_res', '.value'),
+      names_pattern = '([a-z]+)_([a-z]+)'
+    ) %>% 
+    mutate(
+      assign_res = recode_factor(assign_res, 'rest' = 'Total', 'assigned' = 'Assigned')
+    ) %>% 
+    ggplot(aes(x = cnt, y = sample_id, alpha = assign_res, fill = treatment)) + 
+    geom_bar(position = 'stack', stat = 'identity', width = 0.8) +
+    geom_text(aes(x = cnt * 1.02, label = if_else(assign_res == 'Assigned', format(cnt, big.mark = ','), '')), color = '#444444', size = 2.5, hjust = 0, vjust = 0.5, show.legend = F) +
+    xlab('') + ylab('') + 
+    scale_x_continuous(expand = expansion(mult = c(0, 0.01)), labels = label_number(suffix = 'M', scale = 1e-6)) +
+    scale_fill_manual(values = color_palette, name = 'Experimental conditions') +
+    scale_alpha_manual(values = c(0.4, 1), name = 'Quantification results') +
+    theme(
+      text = element_text(size = 8, family = 'Times'),
+      legend.title = element_text(size = 7, face = 'bold'),
+      legend.key = element_rect(color = 'white', size = 0.4),
+      panel.background = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.text.y = element_text(face = 'bold')
+    ) +
+    guides(alpha = guide_legend(reverse = T, order = 2), fill = guide_legend(order = 1))
+}
+
+samples_df <- get_samples_df(meta_data, dir_name)
+```
+
+
+# Raw counts
+
+```{r}
+samples_df %>%
+    select(sample_id, treatment, raw_cnt)
+    
+get_raw_counts(samples_df, dir_name)
+```
+
+
+# Trimming results
+
+```{r}
+samples_df %>%
+    select(sample_id, raw_cnt, trimmed_survived_cnt, trimmed_survived_pct, trimmed_removed_cnt, trimmed_removed_pct)
+    
+get_trimmed_counts(samples_df, dir_name)
+```
+
+
+# Mapping results
+
+```{r}
+samples_df %>%
+    select(sample_id, mapped_input_cnt, mapped_unmapped_pct, mapped_unique_pct, mapped_nonunique_pct, mapped_multi_pct, mapped_many_pct)
+
+get_mapped_counts(samples_df, dir_name)
+```
+
+
+# Deduping results
+
+```{r}
+samples_df %>%
+    select(sample_id, mapped_mapped_cnt, deduped_survived_pct, deduped_dropped_pct)
+    
+get_deduped_counts(samples_df, dir_name)
+```
+
+
+# Quantification results
+
+```{r}
+samples_df %>%
+    select(sample_id, raw_cnt, assigned_cnt, assigned_pct)
+    
+get_assigned_counts(samples_df, dir_name)
+```
+
+
+# System info
+
+```{r}
+sessionInfo()
+```

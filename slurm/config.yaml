@@ -1,0 +1,14 @@
+cluster:
+  sbatch
+    --time={cluster.time}
+    --mem={cluster.mem}
+    --cpus-per-task={threads}
+    --job-name={cluster.jobname}
+    --output={cluster.output}
+cluster-config: 'slurm/cluster.yaml'
+jobs: 10
+latency-wait: 60
+printshellcmds: True
+use-conda: True
+max-jobs-per-second: 5
+max-status-checks-per-second: 5

@@ -1,0 +1,66 @@
+---
+title: 'Jobs Report'
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+    df_print: paged
+---
+
+<style>
+pre code, pre, code {
+  white-space: pre !important;
+  overflow-x: auto !important;
+  word-break: keep-all !important;
+  word-wrap: initial !important;
+}
+</style>
+
+```{r setup, include = F}
+options(width = 10000)
+knitr::opts_chunk$set(fig.width=8, fig.height=4) 
+
+library(tidyverse)
+library(scales)
+
+jobs_df <- read_delim(snakemake@input[['jobs_file']], delim = '|')
+
+batch_df <- jobs_df %>% filter(JobName == 'batch')
+extern_df <- jobs_df %>% filter(JobName == 'extern')
+jobs_df <- jobs_df %>% filter(!JobName %in% c('batch', 'extern'))
+```
+
+
+# Summary
+
+```{r}
+jobs_df
+```
+
+
+# Plot
+
+```{r}
+jobs_df %>%
+  filter(!JobName %in% c('batch', 'extern')) %>% 
+  mutate(
+    Rule = str_extract(JobName, '[a-z_]+'),
+    Sample = str_extract(JobName, 'SRR\\d+'),
+    StartTime = hms::as_hms(difftime(Start, min(jobs_df$Start), units = 'mins')),
+    EndTime = hms::as_hms(difftime(End, min(jobs_df$Start), units = 'mins'))
+  ) %>% 
+  ggplot(aes(x = NodeList, ymin = StartTime, ymax = EndTime, color = Rule, group = JobID)) +
+  geom_linerange(size = 0.8, position = position_dodge(0.8)) +
+  scale_y_time(labels = function(x) str_sub(x, 2, 5), breaks = date_breaks('15 mins'), expand = c(0, 0)) +
+  xlab('') +
+  theme_minimal() +
+  coord_flip()
+```
+
+
+# System info
+
+```{r}
+sessionInfo()
+```

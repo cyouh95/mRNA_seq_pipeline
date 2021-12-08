@@ -1,0 +1,22 @@
+proj_dir: PROJ_DIR
+
+tmp_dir: TMP_DIR
+data_dir: DATA_DIR
+genome_dir: GENOME_DIR
+outputs_dir: results/OUTPUTS_DIR
+
+genome_file: GENOME_FILE
+annotation_file: transcripts/ANNOTATION_FILE
+ref_flat_file: transcripts/REF_FLAT_FILE
+adapters_file: adapters/ADAPTERS_FILE
+multiqc_config_file: config/MULTIQC_CONFIG_FILE
+
+analysis_script: ANALYSIS_SCRIPT
+analysis_outputs:
+  - FILE_NAME(S)
+
+jobs_script: JOBS_SCRIPT
+
+sort_order: SORT_ORDER
+strandedness: STRANDEDNESS
+sjdb_overhang: SJDB_OVERHANG

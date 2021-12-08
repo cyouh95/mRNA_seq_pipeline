@@ -1,0 +1,644 @@
+---
+title: 'Analysis Report (`r params$condition` vs. `r params$control`)'
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+    df_print: paged
+
+params:
+  pval_cutoff: 0.05
+  lfc_cutoff: 0
+  low_counts_cutoff: 10
+  col_data: ''
+  counts_data: ''
+  condition: ''
+  control: ''
+  mm_ensembl_entrez: ''
+  mm_ensembl_symbol: ''
+  mm_h: ''
+  mm_c5_bp: ''
+  mm_c5_cc: ''
+  mm_c5_mf: ''
+  genes_length: ''
+  use_fpkm: false
+---
+
+<style>
+pre code, pre, code {
+  white-space: pre !important;
+  overflow-x: auto !important;
+  word-break: keep-all !important;
+  word-wrap: initial !important;
+}
+</style>
+
+```{r setup, include = F}
+options(width = 10000)
+
+library(tidyverse)
+library(scales)
+library(DESeq2)
+library(pheatmap)
+library(RColorBrewer)
+library(fgsea)
+
+select <- dplyr::select
+
+pval_cutoff <- params$pval_cutoff
+lfc_cutoff <- params$lfc_cutoff
+low_counts_cutoff <- params$low_counts_cutoff
+
+mm_ensembl_entrez <- params$mm_ensembl_entrez
+mm_ensembl_symbol <- params$mm_ensembl_symbol
+
+mm_h <- params$mm_h
+mm_c5_bp <- params$mm_c5_bp
+mm_c5_cc <- params$mm_c5_cc
+mm_c5_mf <- params$mm_c5_mf
+
+condition <- params$condition
+control <- params$control
+col_data <- params$col_data
+counts_data <- params$counts_data
+
+genes_length <- params$genes_length
+use_fpkm <- params$use_fpkm
+
+colors_default <- c('#00d5dc', '#ff877e')
+
+
+get_DESeqDataSet_obj <- function(cnts, design_formula, counts_threshold = low_counts_cutoff) {
+  
+  col_data <- col_data %>%
+    filter(Run %in% names(cnts))
+  
+  col_data <- col_data[match(names(cnts), col_data$Run), ] %>%
+    column_to_rownames(var = 'Run')
+
+  print(all(rownames(col_data) %in% colnames(cnts)))
+  print(all(rownames(col_data) == colnames(cnts)))
+  
+  dds <- DESeqDataSetFromMatrix(countData = as.matrix(round(cnts)),
+                                colData = col_data,
+                                design = design_formula)
+  
+  print(summary(dds))
+  
+  if (use_fpkm) {
+    mcols(dds)$basepairs <- genes_length
+  }
+  
+  # Filter rows with low counts
+  keep <- rowSums(counts(dds)) >= counts_threshold
+  dds <- dds[keep, ]
+  
+  print(summary(dds))
+  
+  dds
+}
+
+get_transformed_data <- function(dds, transformation_type = 'rlog', blind = T) {
+  if (transformation_type == 'vst') {
+    dds_transformed <- vst(dds, blind = blind)
+  } else {
+    dds_transformed <- rlog(dds, blind = blind)
+  }
+  
+  list(
+    matrix = assay(dds_transformed),
+    pca = prcomp(t(assay(dds_transformed)))
+  )
+}
+
+get_fgsea_res <- function(rank_vec, genesets_list) {
+  set.seed(20)
+  fgsea(
+    pathways = genesets_list,
+    stats = rank_vec,
+    nperm = 1000,
+    minSize = 15,
+    maxSize = 500
+  ) %>%
+    as_tibble() %>%
+    arrange(desc(NES))
+}
+
+plot_enrichment_table <- function(gsea_res, rank_vec, genesets_list, n_top = 10) {
+  top_pathways_up <- gsea_res %>% filter(ES > 0) %>% arrange(padj) %>% head(n_top)
+  top_pathways_down <- gsea_res %>% filter(ES < 0) %>% arrange(padj) %>% head(n_top)
+  top_pathways <- bind_rows(top_pathways_up, top_pathways_down) %>% arrange(-NES)
+
+  plotGseaTable(
+    genesets_list[top_pathways$pathway], 
+    rank_vec, 
+    gsea_res, 
+    gseaParam = 0.5
+  )
+}
+```
+
+```{r, echo = F}
+writeLines(str_c('pval_cutoff: ', pval_cutoff))
+writeLines(str_c('lfc_cutoff: ', lfc_cutoff))
+writeLines(str_c('low_counts_cutoff: ', low_counts_cutoff))
+```
+
+
+# General statistics
+
+```{r}
+# Number of samples
+length(counts_data)
+
+# Number of genes
+nrow(counts_data)
+
+# Total counts
+colSums(counts_data)
+```
+
+```{r, echo = F, fig.width = 10}
+counts_df <- data.frame(count = colSums(counts_data)) %>% 
+  rownames_to_column(var = 'Run') %>% 
+  as_tibble() %>% 
+  left_join(col_data, by = 'Run')
+
+counts_df %>% ggplot(aes(x = Run, y = count, fill = label)) +
+  geom_col() +
+  scale_y_continuous(labels = label_number(suffix = 'M', scale = 1e-6)) +
+  scale_fill_manual(values = colors_default) +
+  xlab('') + ylab('') +
+  theme(text = element_text(size = 9))
+```
+
+
+# Create DDS objects
+
+```{r, message = F}
+# Create DESeqDataSet object
+dds <- get_DESeqDataSet_obj(counts_data, ~ treatment)
+colData(dds)
+```
+
+```{r, echo = F}
+if (use_fpkm) {
+  counts_fpkm <- fpkm(dds) %>%
+    data.frame() %>% 
+    rownames_to_column(var = 'ensembl_gene_id') %>% 
+    as_tibble()
+  counts_fpkm$meanFPKM <- rowMeans(counts_fpkm[, c(2:7)])
+}
+```
+
+
+# Sample-to-sample comparisons
+
+```{r}
+# Transform data (blinded rlog)
+rld <- get_transformed_data(dds)
+```
+
+## PCA plot
+
+```{r}
+pca <- rld$pca
+pca_df <- cbind(as.data.frame(colData(dds)) %>% rownames_to_column(var = 'name'), pca$x)
+summary(pca)
+
+ggplot(pca_df, aes(x = PC1, y = PC2, color = label)) +
+  geom_point() +
+  geom_text(aes(label = name), position = position_nudge(y = -2), show.legend = F, size = 3) +
+  scale_color_manual(values = colors_default) +
+  scale_x_continuous(expand = c(0.2, 0))
+```
+
+## Correlation heatmap
+
+```{r}
+pheatmap(
+  cor(rld$matrix),
+  annotation_col = as.data.frame(colData(dds)) %>% select(label),
+  color = brewer.pal(8, 'YlOrRd')
+)
+```
+
+
+# Wald test results
+
+```{r, message = F}
+# DE analysis using Wald test
+dds_full <- DESeq(dds)
+colData(dds_full)
+
+# Wald test results
+res <- results(
+  dds_full,
+  contrast = c('treatment', condition, control),
+  alpha = pval_cutoff
+)
+res
+
+mcols(res)
+summary(res)
+
+plotDispEsts(dds_full)
+```
+
+## Summary details
+
+```{r, echo = F}
+res_df <- res %>%  # dataframe version
+  data.frame() %>% 
+  rownames_to_column(var = 'ensembl_gene_id') %>% 
+  as_tibble()
+
+res_sig_df <- res_df %>%  # filter only DE genes
+  filter(padj < pval_cutoff, abs(log2FoldChange) >= lfc_cutoff) %>% 
+  arrange(padj)
+
+if (use_fpkm) {
+  res_sig_df <- res_sig_df %>% 
+    filter(ensembl_gene_id %in% (counts_fpkm %>% filter(meanFPKM >= 0.5))$ensembl_gene_id)
+}
+```
+
+```{r}
+# Upregulated genes (LFC > 0)
+res_sig_df %>% filter(log2FoldChange > 0)
+
+# Downregulated genes (LFC < 0)
+res_sig_df %>% filter(log2FoldChange < 0)
+
+# Outliers (pvalue and padj are NA)
+res[which(is.na(res$pvalue)), ]
+
+# Low counts (only padj is NA)
+res[which(is.na(res$padj) & !is.na(res$pvalue)), ]
+```
+
+
+# Shrunken LFC results
+
+```{r, message = F}
+plotMA(res)
+
+# Shrunken LFC results
+res_shrunken <- lfcShrink(
+  dds_full,
+  coef = str_c('treatment_', condition, '_vs_', control),
+  type = 'apeglm'
+)
+res_shrunken
+
+plotMA(res_shrunken)
+
+mcols(res_shrunken)
+summary(res_shrunken, alpha = pval_cutoff)
+```
+
+## Summary details
+
+```{r, echo = F}
+res_shrunken_df <- res_shrunken %>%  # dataframe version
+  data.frame() %>% 
+  rownames_to_column(var = 'ensembl_gene_id') %>% 
+  as_tibble()
+
+res_shrunken_sig_df <- res_shrunken_df %>%  # filter only DE genes
+  filter(padj < pval_cutoff) %>% 
+  arrange(padj)
+```
+
+```{r}
+# Upregulated genes (LFC > 0)
+res_shrunken_sig_df %>% filter(log2FoldChange > 0)
+
+# Downregulated genes (LFC < 0)
+res_shrunken_sig_df %>% filter(log2FoldChange < 0)
+
+# Outliers (pvalue and padj are NA)
+res_shrunken[which(is.na(res_shrunken$pvalue)), ]
+
+# Low counts (only padj is NA)
+res_shrunken[which(is.na(res_shrunken$padj) & !is.na(res_shrunken$pvalue)), ]
+```
+
+
+# Visualizing results
+
+```{r, include = F}
+counts_sig_norm <- counts(dds_full, normalized = T) %>%  # normalized counts
+  data.frame() %>%
+  rownames_to_column(var = 'ensembl_gene_id') %>% 
+  as_tibble() %>% 
+  filter(ensembl_gene_id %in% res_sig_df$ensembl_gene_id)
+
+counts_sig_log <- rld$matrix %>%  # log-transformed counts
+  data.frame() %>%
+  rownames_to_column(var = 'ensembl_gene_id') %>% 
+  as_tibble() %>% 
+  filter(ensembl_gene_id %in% res_sig_df$ensembl_gene_id) %>% 
+  left_join(mm_ensembl_symbol, by = 'ensembl_gene_id') %>% 
+  mutate(mgi_symbol = if_else(is.na(mgi_symbol), 'No gene symbol', mgi_symbol))
+```
+
+## Heatmaps
+
+```{r}
+# Plot normalized counts (z-scores)
+pheatmap(counts_sig_norm[2:7], 
+         color = brewer.pal(8, 'YlOrRd'), 
+         cluster_rows = T, 
+         show_rownames = F,
+         annotation_col = as.data.frame(colData(dds)) %>% select(label),
+         border_color = NA,
+         fontsize = 10,
+         scale = 'row',
+         fontsize_row = 10, 
+         height = 20)
+
+# Plot log-transformed counts
+pheatmap(counts_sig_log[2:7], 
+         color = rev(brewer.pal(8, 'RdYlBu')), 
+         cluster_rows = T, 
+         show_rownames = F,
+         annotation_col = as.data.frame(colData(dds)) %>% select(label),
+         border_color = NA,
+         fontsize = 10,
+         fontsize_row = 10, 
+         height = 20)
+
+# Plot log-transformed counts (top 24 DE genes)
+pheatmap(counts_sig_log %>% filter(ensembl_gene_id %in% (res_sig_df %>% head(24))$ensembl_gene_id) %>% select(-ensembl_gene_id) %>% column_to_rownames(var = 'mgi_symbol'),
+         color = rev(brewer.pal(8, 'RdYlBu')), 
+         cluster_rows = T, 
+         show_rownames = T,
+         annotation_col = as.data.frame(colData(dds)) %>% select(label), 
+         fontsize = 10,
+         fontsize_row = 10, 
+         height = 20)
+```
+
+## Volcano plots
+
+```{r, warning = F}
+# Unshrunken LFC
+res_df %>% 
+  mutate(
+    sig_threshold = if_else(
+      padj < pval_cutoff & abs(log2FoldChange) >= lfc_cutoff,
+      if_else(log2FoldChange > 0, 'DE-up', 'DE-down'),
+      'non-DE'
+    )
+  ) %>% 
+  filter(!is.na(sig_threshold)) %>% 
+  ggplot() +
+  geom_point(aes(x = log2FoldChange, y = -log10(padj), colour = sig_threshold)) +
+  scale_color_manual(values = c('blue', 'red', 'gray')) +
+  xlab('log2 fold change') + 
+  ylab('-log10 adjusted p-value')
+
+# Shrunken LFC
+res_shrunken_df %>% 
+  mutate(
+    sig_threshold = if_else(
+      padj < pval_cutoff & abs(log2FoldChange) >= lfc_cutoff,
+      if_else(log2FoldChange > 0, 'DE-up', 'DE-down'),
+      'non-DE'
+    )
+  ) %>% 
+  filter(!is.na(sig_threshold)) %>% 
+  ggplot() +
+  geom_point(aes(x = log2FoldChange, y = -log10(padj), colour = sig_threshold)) +
+  scale_color_manual(values = c('blue', 'red', 'gray')) +
+  xlab('log2 fold change') + 
+  ylab('-log10 adjusted p-value')
+```
+
+
+# GSEA (all)
+
+```{r, echo = F, warning = F, message = F}
+# Shrunken LFC
+rank_lfc_df <- res_shrunken_df %>%
+  left_join(mm_ensembl_entrez, by = 'ensembl_gene_id') %>% 
+  filter(!is.na(entrezgene_id)) %>% 
+  arrange(desc(abs(log2FoldChange))) %>% 
+  group_by(entrezgene_id) %>% 
+  summarise(rank = dplyr::first(log2FoldChange)) %>% 
+  filter(!is.na(rank))
+
+rank_lfc <- rank_lfc_df$rank
+names(rank_lfc) <- rank_lfc_df$entrezgene_id
+
+# Wald stat
+rank_stat_df <- res_df %>% 
+  left_join(mm_ensembl_entrez, by = 'ensembl_gene_id') %>%  
+  filter(!is.na(entrezgene_id)) %>% 
+  group_by(entrezgene_id) %>% 
+  summarise(rank = base::mean(stat, na.rm = T)) %>% 
+  filter(!is.na(rank))
+
+rank_stat <- rank_stat_df$rank
+names(rank_stat) <- rank_stat_df$entrezgene_id
+
+# Rank: sign(LFC) * -log10(pvalue)
+rank_pval_df <- res_df %>% 
+  left_join(mm_ensembl_entrez, by = 'ensembl_gene_id') %>% 
+  filter(!is.na(entrezgene_id)) %>% 
+  mutate(rank = sign(log2FoldChange) * -log10(pvalue)) %>% 
+  group_by(entrezgene_id) %>% 
+  summarise(rank = base::mean(rank, na.rm = T)) %>% 
+  filter(!is.na(rank))
+
+rank_pval <- rank_pval_df$rank
+names(rank_pval) <- rank_pval_df$entrezgene_id
+```
+
+## Hallmark genesets
+
+```{r, warning = F, fig.width = 15}
+# Shrunken LFC
+get_fgsea_res(rank_lfc, mm_h) %>% plot_enrichment_table(rank_lfc, mm_h)
+```
+
+```{r, warning = F, fig.width = 15}
+# Wald stat
+get_fgsea_res(rank_stat, mm_h) %>% plot_enrichment_table(rank_stat, mm_h)
+```
+
+```{r, warning = F, fig.width = 15}
+# Rank: sign(LFC) * -log10(pvalue)
+get_fgsea_res(rank_pval, mm_h) %>% plot_enrichment_table(rank_pval, mm_h)
+```
+
+## GO biological process
+
+```{r, warning = F, fig.width = 15}
+# Shrunken LFC
+get_fgsea_res(rank_lfc, mm_c5_bp) %>% plot_enrichment_table(rank_lfc, mm_c5_bp)
+```
+
+```{r, warning = F, fig.width = 15}
+# Wald stat
+get_fgsea_res(rank_stat, mm_c5_bp) %>% plot_enrichment_table(rank_stat, mm_c5_bp)
+```
+
+```{r, warning = F, fig.width = 15}
+# Rank: sign(LFC) * -log10(pvalue)
+get_fgsea_res(rank_pval, mm_c5_bp) %>% plot_enrichment_table(rank_pval, mm_c5_bp)
+```
+
+## GO cellular component
+
+```{r, warning = F, fig.width = 15}
+# Shrunken LFC
+get_fgsea_res(rank_lfc, mm_c5_cc) %>% plot_enrichment_table(rank_lfc, mm_c5_cc)
+```
+
+```{r, warning = F, fig.width = 15}
+# Wald stat
+get_fgsea_res(rank_stat, mm_c5_cc) %>% plot_enrichment_table(rank_stat, mm_c5_cc)
+```
+
+```{r, warning = F, fig.width = 15}
+# Rank: sign(LFC) * -log10(pvalue)
+get_fgsea_res(rank_pval, mm_c5_cc) %>% plot_enrichment_table(rank_pval, mm_c5_cc)
+```
+
+## GO molecular function
+
+```{r, warning = F, fig.width = 15}
+# Shrunken LFC
+get_fgsea_res(rank_lfc, mm_c5_mf) %>% plot_enrichment_table(rank_lfc, mm_c5_mf)
+```
+
+```{r, warning = F, fig.width = 15}
+# Wald stat
+get_fgsea_res(rank_stat, mm_c5_mf) %>% plot_enrichment_table(rank_stat, mm_c5_mf)
+```
+
+```{r, warning = F, fig.width = 15}
+# Rank: sign(LFC) * -log10(pvalue)
+get_fgsea_res(rank_pval, mm_c5_mf) %>% plot_enrichment_table(rank_pval, mm_c5_mf)
+```
+
+
+# GSEA (DE)
+
+```{r, echo = F, warning = F, message = F}
+# Shrunken LFC
+rank_lfc_df <- res_shrunken_df %>%
+  filter(padj < pval_cutoff) %>% 
+  left_join(mm_ensembl_entrez, by = 'ensembl_gene_id') %>% 
+  filter(!is.na(entrezgene_id)) %>% 
+  arrange(desc(abs(log2FoldChange))) %>% 
+  group_by(entrezgene_id) %>% 
+  summarise(rank = dplyr::first(log2FoldChange)) %>% 
+  filter(!is.na(rank))
+
+rank_lfc <- rank_lfc_df$rank
+names(rank_lfc) <- rank_lfc_df$entrezgene_id
+
+# Wald stat
+rank_stat_df <- res_df %>% 
+  filter(padj < pval_cutoff) %>% 
+  left_join(mm_ensembl_entrez, by = 'ensembl_gene_id') %>%  
+  filter(!is.na(entrezgene_id)) %>% 
+  group_by(entrezgene_id) %>% 
+  summarise(rank = base::mean(stat, na.rm = T)) %>% 
+  filter(!is.na(rank))
+
+rank_stat <- rank_stat_df$rank
+names(rank_stat) <- rank_stat_df$entrezgene_id
+
+# Rank: sign(LFC) * -log10(pvalue)
+rank_pval_df <- res_df %>% 
+  filter(padj < pval_cutoff) %>% 
+  left_join(mm_ensembl_entrez, by = 'ensembl_gene_id') %>% 
+  filter(!is.na(entrezgene_id)) %>% 
+  mutate(rank = sign(log2FoldChange) * -log10(pvalue)) %>% 
+  group_by(entrezgene_id) %>% 
+  summarise(rank = base::mean(rank, na.rm = T)) %>% 
+  filter(!is.na(rank))
+
+rank_pval <- rank_pval_df$rank
+names(rank_pval) <- rank_pval_df$entrezgene_id
+```
+
+## Hallmark genesets
+
+```{r, warning = F, fig.width = 15}
+# Shrunken LFC
+get_fgsea_res(rank_lfc, mm_h) %>% plot_enrichment_table(rank_lfc, mm_h)
+```
+
+```{r, warning = F, fig.width = 15}
+# Wald stat
+get_fgsea_res(rank_stat, mm_h) %>% plot_enrichment_table(rank_stat, mm_h)
+```
+
+```{r, warning = F, fig.width = 15}
+# Rank: sign(LFC) * -log10(pvalue)
+get_fgsea_res(rank_pval, mm_h) %>% plot_enrichment_table(rank_pval, mm_h)
+```
+
+## GO biological process
+
+```{r, warning = F, fig.width = 15}
+# Shrunken LFC
+get_fgsea_res(rank_lfc, mm_c5_bp) %>% plot_enrichment_table(rank_lfc, mm_c5_bp)
+```
+
+```{r, warning = F, fig.width = 15}
+# Wald stat
+get_fgsea_res(rank_stat, mm_c5_bp) %>% plot_enrichment_table(rank_stat, mm_c5_bp)
+```
+
+```{r, warning = F, fig.width = 15}
+# Rank: sign(LFC) * -log10(pvalue)
+get_fgsea_res(rank_pval, mm_c5_bp) %>% plot_enrichment_table(rank_pval, mm_c5_bp)
+```
+
+## GO cellular component
+
+```{r, warning = F, fig.width = 15}
+# Shrunken LFC
+get_fgsea_res(rank_lfc, mm_c5_cc) %>% plot_enrichment_table(rank_lfc, mm_c5_cc)
+```
+
+```{r, warning = F, fig.width = 15}
+# Wald stat
+get_fgsea_res(rank_stat, mm_c5_cc) %>% plot_enrichment_table(rank_stat, mm_c5_cc)
+```
+
+```{r, warning = F, fig.width = 15}
+# Rank: sign(LFC) * -log10(pvalue)
+get_fgsea_res(rank_pval, mm_c5_cc) %>% plot_enrichment_table(rank_pval, mm_c5_cc)
+```
+
+## GO molecular function
+
+```{r, warning = F, fig.width = 15}
+# Shrunken LFC
+get_fgsea_res(rank_lfc, mm_c5_mf) %>% plot_enrichment_table(rank_lfc, mm_c5_mf)
+```
+
+```{r, warning = F, fig.width = 15}
+# Wald stat
+get_fgsea_res(rank_stat, mm_c5_mf) %>% plot_enrichment_table(rank_stat, mm_c5_mf)
+```
+
+```{r, warning = F, fig.width = 15}
+# Rank: sign(LFC) * -log10(pvalue)
+get_fgsea_res(rank_pval, mm_c5_mf) %>% plot_enrichment_table(rank_pval, mm_c5_mf)
+```
+
+
+# System info
+
+```{r}
+sessionInfo()
+```

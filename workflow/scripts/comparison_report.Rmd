@@ -1,0 +1,235 @@
+---
+title: 'Comparison Report (`r params$condition` vs. `r params$control`)'
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+    df_print: paged
+
+params:
+  pval_cutoff: 0.05
+  lfc_cutoff: 0
+  low_counts_cutoff: 10
+  col_data: ''
+  counts_paper: ''
+  counts_project: ''
+  condition: ''
+  control: ''
+---
+
+<style>
+pre code, pre, code {
+  white-space: pre !important;
+  overflow-x: auto !important;
+  word-break: keep-all !important;
+  word-wrap: initial !important;
+}
+</style>
+
+```{r setup, include = F}
+options(width = 10000)
+
+library(tidyverse)
+library(scales)
+library(DESeq2)
+library(pheatmap)
+library(RColorBrewer)
+library(fgsea)
+library(VennDiagram)
+
+select <- dplyr::select
+
+pval_cutoff <- params$pval_cutoff
+lfc_cutoff <- params$lfc_cutoff
+low_counts_cutoff <- params$low_counts_cutoff
+
+condition <- params$condition
+control <- params$control
+col_data <- params$col_data
+counts_paper <- params$counts_paper
+counts_project <- params$counts_project
+
+colors_default <- c('#00d5dc', '#ff877e')
+
+
+get_DESeqDataSet_obj <- function(cnts, design_formula, counts_threshold = low_counts_cutoff) {
+  
+  col_data <- col_data %>%
+    filter(Run %in% names(cnts))
+  
+  col_data <- col_data[match(names(cnts), col_data$Run),] %>%
+    column_to_rownames(var = 'Run')
+  
+  print(all(rownames(col_data) %in% colnames(cnts)))
+  print(all(rownames(col_data) == colnames(cnts)))
+  
+  dds <- DESeqDataSetFromMatrix(countData = as.matrix(round(cnts)),
+                                colData = col_data,
+                                design = design_formula)
+  
+  print(summary(dds))
+  
+  # Filter rows with low counts
+  keep <- rowSums(counts(dds)) >= counts_threshold
+  dds <- dds[keep, ]
+  
+  print(summary(dds))
+  
+  dds
+}
+```
+
+```{r, echo = F}
+writeLines(str_c('pval_cutoff: ', pval_cutoff))
+writeLines(str_c('lfc_cutoff: ', lfc_cutoff))
+writeLines(str_c('low_counts_cutoff: ', low_counts_cutoff))
+```
+
+
+# Paper DE results
+
+```{r, message = F, warning = F}
+# Create DESeqDataSet object
+dds_paper <- get_DESeqDataSet_obj(counts_paper, ~ treatment)
+
+# DE analysis using Wald test
+dds_paper <- DESeq(dds_paper)
+colData(dds_paper)
+
+# Wald test results
+res_paper <- results(
+  dds_paper,
+  contrast = c('treatment', condition, control),
+  alpha = pval_cutoff
+)
+summary(res_paper)
+```
+
+
+# Project DE results
+
+```{r, message = F, warning = F}
+# Create DESeqDataSet object
+dds_project <- get_DESeqDataSet_obj(counts_project, ~ treatment)
+
+# DE analysis using Wald test
+dds_project <- DESeq(dds_project)
+colData(dds_project)
+
+# Wald test results
+res_project <- results(
+  dds_project,
+  contrast = c('treatment', condition, control),
+  alpha = pval_cutoff
+)
+summary(res_project)
+```
+
+```{r, echo = F, message = F, results = 'hide'}
+# Paper data
+res_paper_df <- res_paper %>%
+  data.frame() %>% 
+  rownames_to_column(var = 'ensembl_gene_id') %>% 
+  as_tibble()
+
+res_paper_sig_df <- res_paper_df %>%
+  filter(padj < pval_cutoff, abs(log2FoldChange) >= lfc_cutoff)
+
+res_paper_up_df <- res_paper_sig_df %>%
+  filter(log2FoldChange > 0)
+
+res_paper_down_df <- res_paper_sig_df %>%
+  filter(log2FoldChange < 0)
+
+
+# Project data
+res_project_df <- res_project %>%
+  data.frame() %>% 
+  rownames_to_column(var = 'ensembl_gene_id') %>% 
+  as_tibble()
+
+res_project_sig_df <- res_project_df %>%
+  filter(padj < pval_cutoff, abs(log2FoldChange) >= lfc_cutoff)
+
+res_project_up_df <- res_project_sig_df %>%
+  filter(log2FoldChange > 0)
+
+res_project_down_df <- res_project_sig_df %>%
+  filter(log2FoldChange < 0)
+```
+
+
+# DE genes comparison
+
+```{r}
+# All genes
+grid::grid.draw(
+  venn.diagram(
+    list(paper = res_paper_df$ensembl_gene_id, project = res_project_df$ensembl_gene_id),
+    fill = c('#F2F0F7', '#DADAEB'),
+    filename = NULL
+  )
+)
+```
+
+## DE genes
+
+```{r}
+# DE genes
+grid::grid.draw(
+  venn.diagram(
+    list(
+      paper = res_paper_sig_df$ensembl_gene_id,
+      project = res_project_sig_df$ensembl_gene_id
+    ),
+    fill = c('#EFF3FF', '#C6DBEF'),
+    filename = NULL
+  )
+)
+
+base::intersect(res_paper_sig_df$ensembl_gene_id, res_project_sig_df$ensembl_gene_id)
+```
+
+## Upregulated genes
+
+```{r}
+# Upregulated genes
+grid::grid.draw(
+  venn.diagram(
+    list(
+      paper = res_paper_up_df$ensembl_gene_id,
+      project = res_project_up_df$ensembl_gene_id
+    ),
+    fill = c('#EDF8E9', '#C7E9C0'),
+    filename = NULL
+  )
+)
+
+base::intersect(res_paper_up_df$ensembl_gene_id, res_project_up_df$ensembl_gene_id)
+```
+
+## Downregulated genes
+
+```{r}
+# Downregulated genes
+grid::grid.draw(
+  venn.diagram(
+    list(
+      paper = res_paper_down_df$ensembl_gene_id,
+      project = res_project_down_df$ensembl_gene_id
+    ),
+    fill = c('#FEE5D9', '#FCBBA1'),
+    filename = NULL
+  )
+)
+
+base::intersect(res_paper_down_df$ensembl_gene_id, res_project_down_df$ensembl_gene_id)
+```
+
+
+# System info
+
+```{r}
+sessionInfo()
+```

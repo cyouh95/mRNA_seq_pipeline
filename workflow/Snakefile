@@ -92,7 +92,7 @@ COUNTS_LOG = f'{FTCOUNT_DIR}/counts.txt.summary'
 R_OUTPUTS = [f'{R_DIR}/{file}' for file in config['analysis_outputs'] + ['summary_report.html']]
 
 JOBS_FILE = f'{R_DIR}/jobs.txt'
-JOBS_OUTPUT = f'{R_DIR}/jobs.html'
+JOBS_OUTPUT = f'{R_DIR}/jobs_report.html'
 
 
 # Define file lists

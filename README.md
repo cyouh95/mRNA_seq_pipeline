@@ -64,4 +64,4 @@ The outputs folder, specified by **outputs_dir** in [`config/config.yaml`](https
 
 ## Resources
 
-All resources, including data and reference genome, must be placed inside the **resources** folder. Filepaths are written relative to it when specified in [`config/config.yaml`](https://github.com/cyouh95/mRNA_seq_pipeline/blob/main/config/config.default.yaml).
+All resources, including data and reference genome, must be placed inside the **[resources](https://github.com/cyouh95/mRNA_seq_pipeline/tree/main/resources)** folder. Filepaths are written relative to it when specified in [`config/config.yaml`](https://github.com/cyouh95/mRNA_seq_pipeline/blob/main/config/config.default.yaml).
